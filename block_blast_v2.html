@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Block Blast: Master Edition</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;700;900&display=swap');
+
+        :root {
+            --bg: #050507;
+            --grid-empty: #12121a;
+            --neon-blue: #00f2ff;
+            --transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        body {
+            margin: 0; background: var(--bg); color: #fff;
+            font-family: 'Outfit', sans-serif; height: 100vh;
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            overflow: hidden; touch-action: none;
+        }
+
+        .bg-glow {
+            position: fixed; width: 100vw; height: 100vh;
+            background: radial-gradient(circle at 50% 50%, #1e1b4b 0%, #050507 100%);
+            z-index: -1;
+        }
+
+        #ui { display: flex; gap: 30px; margin-bottom: 20px; position: relative; }
+        .stat {
+            background: rgba(255,255,255,0.05); padding: 10px 25px;
+            border-radius: 20px; border: 1px solid rgba(255,255,255,0.1);
+            backdrop-filter: blur(10px); text-align: center; min-width: 80px;
+        }
+        .label { font-size: 12px; color: #94a3b8; display: block; font-weight: 700; }
+        .val { font-size: 28px; font-weight: 900; color: #fff; }
+
+        /* Sıfırlama butonu sağ üst köşeye taşındı */
+        #reset-area {
+            position: absolute; top: 20px; right: 20px;
+        }
+
+        #game-wrap {
+            position: relative; padding: 10px;
+            background: rgba(255,255,255,0.02);
+            border-radius: 24px; border: 2px solid rgba(255,255,255,0.1);
+            box-shadow: 0 20px 50px rgba(0,0,0,0.5);
+        }
+        canvas { border-radius: 12px; cursor: grab; }
+        canvas:active { cursor: grabbing; }
+
+        #tray { margin-top: 30px; display: flex; gap: 15px; height: 130px; }
+        .slot {
+            width: 105px; height: 105px; background: rgba(255,255,255,0.03);
+            border-radius: 20px; border: 1px dashed rgba(255,255,255,0.1);
+        }
+
+        .icon-btn {
+            background: rgba(255,255,255,0.05); border: none; color: #fff;
+            width: 50px; height: 50px; border-radius: 50%; cursor: pointer;
+            font-size: 20px; transition: var(--transition);
+        }
+        .icon-btn:hover { background: #fff; color: #000; transform: scale(1.1); }
+
+        #overlay {
+            position: fixed; inset: 0; background: rgba(0,0,0,0.9);
+            display: none; align-items: center; justify-content: center; z-index: 100;
+        }
+        .modal { background: #111; padding: 40px; border-radius: 30px; border: 2px solid #333; text-align: center; }
+
+        .combo-popup {
+            position: absolute; color: #ffce00; font-weight: 900; font-size: 32px;
+            pointer-events: none; animation: comboPop 0.8s ease-out forwards;
+            text-shadow: 0 0 15px rgba(255,206,0,0.6); z-index: 50;
+        }
+        @keyframes comboPop {
+            0% { transform: scale(0.5); opacity: 0; }
+            50% { opacity: 1; }
+            100% { transform: scale(1.5) translateY(-50px); opacity: 0; }
+        }
+    </style>
+</head>
+<body>
+
+    <div class="bg-glow"></div>
+
+    <div id="reset-area">
+        <button class="icon-btn" onclick="location.reload()">🔄</button>
+    </div>
+
+    <div id="ui">
+        <div class="stat"><span class="label">SCORE</span><span id="score" class="val">0</span></div>
+        <div class="stat"><span class="label">BEST</span><span id="high" class="val">0</span></div>
+    </div>
+
+    <div id="game-wrap">
+        <canvas id="board"></canvas>
+    </div>
+
+    <div id="tray">
+        <canvas id="s0" class="slot" width="105" height="105"></canvas>
+        <canvas id="s1" class="slot" width="105" height="105"></canvas>
+        <canvas id="s2" class="slot" width="105" height="105"></canvas>
+    </div>
+
+    <div id="overlay">
+        <div class="modal">
+            <h1 id="m-title">GAME OVER</h1>
+            <p id="f-score" style="margin: 20px 0; color: #94a3b8;">Score: 0</p>
+            <button class="icon-btn" style="width: auto; padding: 0 30px; border-radius: 12px;" onclick="location.reload()">TRY AGAIN</button>
+        </div>
+    </div>
+
+<script>
+const canvas = document.getElementById('board');
+const ctx = canvas.getContext('2d');
+
+const GRID = 8, CELL = 50;
+canvas.width = canvas.height = GRID * CELL;
+
+let grid = Array(GRID).fill().map(() => Array(GRID).fill(0));
+let score = 0, high = localStorage.getItem('bb_v3_high') || 0;
+let tray = [null, null, null], active = null, particles = [];
+
+const COLORS = {
+    1: '#00f2ff', 2: '#7000ff', 3: '#ff007a', 
+    4: '#39ff14', 5: '#ffce00', 6: '#ff5e00', 7: '#ffffff'
+};
+
+const SHAPES = [
+    { s: [[1,1,1,1]], c: 1 }, { s: [[1,1],[1,1]], c: 2 },
+    { s: [[1,1,1],[0,1,0]], c: 3 }, { s: [[1,1,0],[0,1,1]], c: 4 },
+    { s: [[1,1,1],[1,0,0]], c: 5 }, { s: [[1]], c: 6 }, { s: [[1,1,1]], c: 7 }
+];
+
+function init() {
+    document.getElementById('high').innerText = high;
+    spawn();
+    requestAnimationFrame(loop);
+}
+
+function spawn() {
+    for(let i=0; i<3; i++) if(!tray[i]) tray[i] = SHAPES[Math.floor(Math.random() * SHAPES.length)];
+    checkEnd();
+}
+
+function checkEnd() {
+    let canMove = false;
+    tray.forEach(p => {
+        if(!p) return;
+        for(let r=0; r<GRID; r++) {
+            for(let c=0; c<GRID; c++) if(canPlace(p.s, r, c)) canMove = true;
+        }
+    });
+    if(!canMove && tray.some(p => p !== null)) {
+        document.getElementById('f-score').innerText = "Final Score: " + score;
+        document.getElementById('overlay').style.display = 'flex';
+    }
+}
+
+function canPlace(shape, r, c) {
+    for(let y=0; y<shape.length; y++) {
+        for(let x=0; x<shape[y].length; x++) {
+            if(shape[y][x]) {
+                if(r+y<0 || r+y>=GRID || c+x<0 || c+x>=GRID || grid[r+y][c+x]) return false;
+            }
+        }
+    }
+    return true;
+}
+
+// Akıllı tahta için Touch eventlerini Mouse eventlerine yönlendirme
+function handleInput(e) {
+    const isTouch = e.type.startsWith('touch');
+    const clientX = isTouch ? e.touches[0].clientX : e.clientX;
+    const clientY = isTouch ? e.touches[0].clientY : e.clientY;
+    
+    if (e.type === 'mousedown' || e.type === 'touchstart') {
+        const t = e.target;
+        if(t.classList.contains('slot')) {
+            const i = t.id[1];
+            if(tray[i]) active = { ...tray[i], idx: i, mx: clientX, my: clientY };
+        }
+    } else if ((e.type === 'mousemove' || e.type === 'touchmove') && active) {
+        active.mx = clientX;
+        active.my = clientY;
+        if(isTouch) e.preventDefault(); // Kaydırmayı engelle
+    } else if (e.type === 'mouseup' || e.type === 'touchend') {
+        if(!active) return;
+        const rect = canvas.getBoundingClientRect();
+        const finalX = isTouch ? e.changedTouches[0].clientX : e.clientX;
+        const finalY = isTouch ? e.changedTouches[0].clientY : e.clientY;
+        
+        const c = Math.floor((finalX - rect.left - (active.s[0].length*CELL)/2)/CELL + 0.5);
+        const r = Math.floor((finalY - rect.top - (active.s.length*CELL)/2)/CELL + 0.5);
+
+        if(canPlace(active.s, r, c)) {
+            active.s.forEach((row, y) => row.forEach((v, x) => {
+                if(v) grid[r+y][c+x] = active.c;
+            }));
+            tray[active.idx] = null;
+            clearLines();
+            if(tray.every(p => p === null)) spawn();
+            else checkEnd();
+        }
+        active = null;
+    }
+}
+
+['mousedown', 'mousemove', 'mouseup', 'touchstart', 'touchmove', 'touchend'].forEach(evt => {
+    window.addEventListener(evt, handleInput, { passive: false });
+});
+
+function clearLines() {
+    let rs = [], cs = [];
+    for(let i=0; i<GRID; i++) {
+        if(grid[i].every(v => v !== 0)) rs.push(i);
+        if(grid.map(r => r[i]).every(v => v !== 0)) cs.push(i);
+    }
+    
+    const lines = rs.length + cs.length;
+    if(lines > 0) {
+        if(lines >= 2) showComboText(lines);
+        rs.forEach(r => { grid[r] = Array(GRID).fill(0); createExplosion(r, null); });
+        cs.forEach(c => { grid.forEach(row => row[c] = 0); createExplosion(null, c); });
+        
+        score += lines * 100 * lines;
+        document.getElementById('score').innerText = score;
+        if(score > high) { high = score; localStorage.setItem('bb_v3_high', high); document.getElementById('high').innerText = high; }
+    }
+}
+
+function showComboText(n) {
+    const div = document.createElement('div');
+    div.className = 'combo-popup';
+    div.innerText = n > 2 ? 'EXCELLENT!' : 'COMBO!';
+    div.style.left = '50%'; div.style.top = '40%';
+    document.getElementById('game-wrap').appendChild(div);
+    setTimeout(() => div.remove(), 800);
+}
+
+function createExplosion(r, c) {
+    for(let i=0; i<15; i++) {
+        particles.push({
+            x: c !== null ? c*CELL + 25 : Math.random()*canvas.width,
+            y: r !== null ? r*CELL + 25 : Math.random()*canvas.height,
+            vX: (Math.random()-0.5)*10, vY: (Math.random()-0.5)*10,
+            a: 1
+        });
+    }
+}
+
+function loop() {
+    ctx.clearRect(0,0,canvas.width, canvas.height);
+    for(let r=0; r<GRID; r++) {
+        for(let c=0; c<GRID; c++) {
+            ctx.fillStyle = grid[r][c] ? COLORS[grid[r][c]] : '#12121a';
+            ctx.shadowBlur = grid[r][c] ? 15 : 0;
+            ctx.shadowColor = grid[r][c] ? COLORS[grid[r][c]] : 'transparent';
+            ctx.beginPath();
+            ctx.roundRect(c*CELL+2, r*CELL+2, CELL-4, CELL-4, 8);
+            ctx.fill();
+        }
+    }
+
+    if(active) {
+        const rect = canvas.getBoundingClientRect();
+        const rx = active.mx - rect.left - (active.s[0].length*CELL)/2;
+        const ry = active.my - rect.top - (active.s.length*CELL)/2;
+        ctx.globalAlpha = 0.7;
+        ctx.shadowBlur = 20; ctx.shadowColor = COLORS[active.c];
+        active.s.forEach((row, y) => row.forEach((v, x) => {
+            if(v) { ctx.fillStyle = COLORS[active.c]; ctx.beginPath(); ctx.roundRect(rx + x*CELL, ry + y*CELL, CELL-4, CELL-4, 8); ctx.fill(); }
+        }));
+        ctx.globalAlpha = 1;
+    }
+
+    particles.forEach((p, i) => {
+        p.x += p.vX; p.y += p.vY; p.a -= 0.03;
+        ctx.fillStyle = `rgba(255,255,255,${p.a})`;
+        ctx.fillRect(p.x, p.y, 3, 3);
+        if(p.a <= 0) particles.splice(i, 1);
+    });
+
+    for(let i=0; i<3; i++) {
+        const sC = document.getElementById('s'+i);
+        const sX = sC.getContext('2d');
+        sX.clearRect(0,0,105,105);
+        if(tray[i] && (!active || active.idx != i)) {
+            const p = tray[i];
+            const sz = 20;
+            sX.fillStyle = COLORS[p.c];
+            sX.shadowBlur = 8; sX.shadowColor = COLORS[p.c];
+            const offX = (105-p.s[0].length*sz)/2, offY = (105-p.s.length*sz)/2;
+            p.s.forEach((row, y) => row.forEach((v, x) => {
+                if(v) { sX.beginPath(); sX.roundRect(offX+x*sz, offY+y*sz, sz-2, sz-2, 5); sX.fill(); }
+            }));
+        }
+    }
+    requestAnimationFrame(loop);
+}
+
+init();
+</script>
+</body>
+</html>
